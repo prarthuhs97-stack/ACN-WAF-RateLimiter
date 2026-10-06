@@ -1,6 +1,7 @@
 import socket
 import threading
 from normalizer import normalize_request
+from rate_limiter import RateLimiter
 
 from http_parser import (
     MAX_HEADER_BYTES,
@@ -13,7 +14,7 @@ from http_response import build_response
 HOST = "0.0.0.0"
 PORT = 8080
 READ_TIMEOUT = 5  # seconds
-
+RATE_LIMITER = RateLimiter.from_env()
 
 def read_request(client_socket):
     buffer = b""
@@ -68,9 +69,32 @@ def process_connection(client_socket, client_addr):
 
     if request is None:
         return None
-    request.client_ip = client_addr[0]
-    return handle_request(request)
 
+    request.client_ip = client_addr[0]
+
+    # Normalize before rate limiting.
+    normalized = normalize_request(request)
+
+    # Token Bucket rate limiter.
+    decision = RATE_LIMITER.allow(request.client_ip)
+
+    if not decision.allowed:
+        body = b"429 Too Many Requests\n"
+        headers = [
+            "HTTP/1.1 429 Too Many Requests",
+            "Content-Type: text/plain",
+            "Content-Length: %d" % len(body),
+            "Connection: close",
+        ]
+
+        if decision.retry_after:
+            headers.append(
+                "Retry-After: %d" % decision.retry_after
+            )
+
+        return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+
+    return handle_request(request, normalized)
 
 def handle_client(client_socket, client_addr):
     try:
