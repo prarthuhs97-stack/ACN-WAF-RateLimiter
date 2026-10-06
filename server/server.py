@@ -1,9 +1,13 @@
+import json
+import os
 import socket
 import threading
+import time
 from normalizer import normalize_request
 from rate_limiter import RateLimiter
 from waf import WAF
 from pipeline import Pipeline
+from metrics import Metrics
 from http_parser import (
     MAX_HEADER_BYTES,
     ParseError,
@@ -18,6 +22,9 @@ READ_TIMEOUT = 5  # seconds
 RATE_LIMITER = RateLimiter.from_env()
 WAF_ENGINE = WAF()
 PIPELINE = Pipeline.from_env(RATE_LIMITER, WAF_ENGINE)
+METRICS = Metrics(PIPELINE.order)
+METRICS_OUTPUT_ENV = "METRICS_OUTPUT"  # optional file path for the final summary
+
 def read_request(client_socket):
     buffer = b""
     while b"\r\n\r\n" not in buffer:
@@ -65,14 +72,23 @@ def process_connection(client_socket, client_addr):
     try:
         request = read_request(client_socket)
     except ParseError as error:
+        # Malformed request: counted, but not timed (it never reached the pipeline).
+        METRICS.record_request()
+        METRICS.record_response(error.status)
         return build_response(error.status, error.message + "\n")
     except socket.timeout:
+        METRICS.record_request()
+        METRICS.record_response(408)
         return build_response(408, "Request timed out\n")
 
     if request is None:
         return None
 
     request.client_ip = client_addr[0]
+
+    # Metrics: the timer covers normalization + pipeline + response building.
+    METRICS.record_request()
+    started = time.monotonic()
 
     # Normalize before rate limiting.
     normalized = normalize_request(request)
@@ -94,7 +110,10 @@ def process_connection(client_socket, client_addr):
                 "Retry-After: %d" % outcome.retry_after
             )
 
-        return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+        response = ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+        METRICS.record_rate_limit()
+        METRICS.record_response(429, time.monotonic() - started)
+        return response
 
     if outcome.status == 403:
         verdict = outcome.waf
@@ -119,10 +138,16 @@ def process_connection(client_socket, client_addr):
             "Connection: close",
         ]
 
-        return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+        response = ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+        METRICS.record_waf_block(
+            verdict.attack_type, verdict.rule, verdict.location
+        )
+        METRICS.record_response(403, time.monotonic() - started)
+        return response
 
-    return handle_request(request, normalized)
-    
+    response = handle_request(request, normalized)
+    METRICS.record_response(200, time.monotonic() - started)
+    return response
 
 
 def handle_client(client_socket, client_addr):
@@ -144,14 +169,29 @@ def main():
     server_socket.listen(50)
     print(f"Listening on {HOST}:{PORT}")
 
-    while True:
-        client_socket, client_addr = server_socket.accept()
-        thread = threading.Thread(
-            target=handle_client,
-            args=(client_socket, client_addr),
-            daemon=True,
-        )
-        thread.start()
+    try:
+        while True:
+            client_socket, client_addr = server_socket.accept()
+            thread = threading.Thread(
+                target=handle_client,
+                args=(client_socket, client_addr),
+                daemon=True,
+            )
+            thread.start()
+    except KeyboardInterrupt:
+        pass  # Ctrl+C: stop the server and print the experiment summary
+    finally:
+        server_socket.close()
+        report_metrics()
+
+
+def report_metrics():
+    summary = json.dumps(METRICS.snapshot(), indent=2, sort_keys=True)
+    print("\n[METRICS]\n" + summary, flush=True)
+    path = os.environ.get(METRICS_OUTPUT_ENV)
+    if path:
+        with open(path, "w") as output_file:
+            output_file.write(summary + "\n")
 
 
 if __name__ == "__main__":
