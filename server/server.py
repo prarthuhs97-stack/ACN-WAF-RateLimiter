@@ -1,5 +1,6 @@
 import socket
 import threading
+from normalizer import normalize_request
 
 from http_parser import (
     MAX_HEADER_BYTES,
@@ -40,20 +41,23 @@ def read_request(client_socket):
 
 
 def handle_request(request):
+    normalized = normalize_request(request)
     lines = [
+        "--- original (raw) ---",
         f"method : {request.method}",
-        f"path   : {request.path}",
-        f"query  : {request.query}",
+        f"path   : {request.path!r}",
+        f"query  : {request.query!r}",
         f"version: {request.version}",
         f"client : {request.client_ip}",
-        "headers:",
+        f"body   : {request.body!r}",
+        "--- normalized ---",
+        f"path   : {normalized.path!r}",
+        f"query  : {normalized.query!r}",
+        f"params : {normalized.params!r}",
+        f"body   : {normalized.body_text!r}",
+        f"flags  : {normalized.flags!r}",
     ]
-    for name, value in request.headers.items():
-        lines.append(f"  {name}: {value}")
-    lines.append(f"body   : {request.body!r}")
     return build_response(200, "\n".join(lines) + "\n")
-
-
 def process_connection(client_socket, client_addr):
     try:
         request = read_request(client_socket)
