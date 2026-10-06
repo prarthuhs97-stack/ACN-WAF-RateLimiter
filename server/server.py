@@ -2,7 +2,7 @@ import socket
 import threading
 from normalizer import normalize_request
 from rate_limiter import RateLimiter
-
+from waf import WAF
 from http_parser import (
     MAX_HEADER_BYTES,
     ParseError,
@@ -15,7 +15,7 @@ HOST = "0.0.0.0"
 PORT = 8080
 READ_TIMEOUT = 5  # seconds
 RATE_LIMITER = RateLimiter.from_env()
-
+WAF_ENGINE = WAF()
 def read_request(client_socket):
     buffer = b""
     while b"\r\n\r\n" not in buffer:
@@ -41,7 +41,7 @@ def read_request(client_socket):
     return request
 
 
-def handle_request(request):
+def handle_request(request,normalized):
     normalized = normalize_request(request)
     lines = [
         "--- original (raw) ---",
@@ -94,7 +94,35 @@ def process_connection(client_socket, client_addr):
 
         return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
 
+        # WAF inspection.
+    verdict = WAF_ENGINE.inspect(normalized)
+
+    if verdict.blocked:
+        print(
+            "[WAF] blocked ip=%s type=%s rule=%s loc=%s"
+            % (
+                request.client_ip,
+                verdict.attack_type,
+                verdict.rule,
+                verdict.location,
+            ),
+            flush=True,
+        )
+
+        body = b"403 Forbidden: request blocked by WAF\n"
+        headers = [
+            "HTTP/1.1 403 Forbidden",
+            "Content-Type: text/plain",
+            "Content-Length: %d" % len(body),
+            "Connection: close",
+        ]
+
+        return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
+
     return handle_request(request, normalized)
+
+    
+
 
 def handle_client(client_socket, client_addr):
     try:
