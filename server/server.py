@@ -3,6 +3,7 @@ import threading
 from normalizer import normalize_request
 from rate_limiter import RateLimiter
 from waf import WAF
+from pipeline import Pipeline
 from http_parser import (
     MAX_HEADER_BYTES,
     ParseError,
@@ -16,6 +17,7 @@ PORT = 8080
 READ_TIMEOUT = 5  # seconds
 RATE_LIMITER = RateLimiter.from_env()
 WAF_ENGINE = WAF()
+PIPELINE = Pipeline.from_env(RATE_LIMITER, WAF_ENGINE)
 def read_request(client_socket):
     buffer = b""
     while b"\r\n\r\n" not in buffer:
@@ -75,10 +77,10 @@ def process_connection(client_socket, client_addr):
     # Normalize before rate limiting.
     normalized = normalize_request(request)
 
-    # Token Bucket rate limiter.
-    decision = RATE_LIMITER.allow(request.client_ip)
+    # Configurable security pipeline.
+    outcome = PIPELINE.process(request, normalized)
 
-    if not decision.allowed:
+    if outcome.status == 429:
         body = b"429 Too Many Requests\n"
         headers = [
             "HTTP/1.1 429 Too Many Requests",
@@ -87,24 +89,24 @@ def process_connection(client_socket, client_addr):
             "Connection: close",
         ]
 
-        if decision.retry_after:
+        if outcome.retry_after:
             headers.append(
-                "Retry-After: %d" % decision.retry_after
+                "Retry-After: %d" % outcome.retry_after
             )
 
         return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
 
-        # WAF inspection.
-    verdict = WAF_ENGINE.inspect(normalized)
+    if outcome.status == 403:
+        verdict = outcome.waf
 
-    if verdict.blocked:
         print(
-            "[WAF] blocked ip=%s type=%s rule=%s loc=%s"
+            "[WAF] blocked ip=%s type=%s rule=%s loc=%s order=%s"
             % (
                 request.client_ip,
                 verdict.attack_type,
                 verdict.rule,
                 verdict.location,
+                PIPELINE.order,
             ),
             flush=True,
         )
@@ -120,7 +122,6 @@ def process_connection(client_socket, client_addr):
         return ("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body
 
     return handle_request(request, normalized)
-
     
 
 
