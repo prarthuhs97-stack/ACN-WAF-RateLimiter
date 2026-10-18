@@ -1,0 +1,7 @@
+experiment,metric,rate_limit_first,waf_first,unit
+Mixed,legitimate_success_rate,18,28,percent
+Mixed,malicious_http_403_rate,14,100,percent
+Mixed,legitimate_average_latency,12.191,9.881,ms
+Mixed,legitimate_p95_latency,24.648,17.638,ms
+Mixed,malicious_average_latency,13.267,10.308,ms
+Mixed,malicious_p95_latency,22.785,16.088,ms
