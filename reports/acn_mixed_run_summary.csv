@@ -1,0 +1,5 @@
+run,pipeline,legit_200,legit_429,malicious_403,malicious_429,legit_avg_ms,legit_p95_ms,mal_avg_ms,mal_p95_ms
+Mixed 1,rate_limit_first,9,41,7,43,12.191,24.648,13.267,22.785
+Mixed 1,waf_first,14,36,50,0,9.881,17.638,10.308,16.088
+Mixed repeat,rate_limit_first,6,44,9,41,11.311,19.648,10.958,16.57
+Mixed repeat,waf_first,16,34,50,0,13.536,16.334,12.055,16.742
