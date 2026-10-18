@@ -1,0 +1,8 @@
+"Pipeline","RequestType","StatusCode","Count"
+"rate_limit_first","legitimate","200","6"
+"rate_limit_first","malicious","403","9"
+"rate_limit_first","malicious","429","41"
+"rate_limit_first","legitimate","429","44"
+"waf_first","legitimate","200","16"
+"waf_first","malicious","403","50"
+"waf_first","legitimate","429","34"
